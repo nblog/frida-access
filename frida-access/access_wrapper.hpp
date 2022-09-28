@@ -516,6 +516,13 @@ DetourNtClose(
 		OriginalNtClose(
 			Handle);
 
+	if (STATUS_ACCESS_DENIED == status)
+	{
+		return \
+			Processes::Descriptors::KbCloseHandle(
+				(WdkTypes::HANDLE)(Handle)) ? STATUS_SUCCESS : RtlGetLastNtStatus();
+	}
+
 	return status;
 }
 
