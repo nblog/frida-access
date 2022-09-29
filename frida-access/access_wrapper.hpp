@@ -158,6 +158,14 @@ DetourNtFreeVirtualMemory(
 			ProcessHandle, 
 			BaseAddress, RegionSize, FreeType);
 
+	if (ProcessHandle != GetCurrentProcess() && GetCurrentProcessId() != GetProcessId(ProcessHandle))
+	{
+		return \
+			Processes::MemoryManagement::KbFreeUserMemory(
+				GetProcessId(ProcessHandle),
+				(WdkTypes::PVOID)(*BaseAddress)) ? STATUS_SUCCESS : RtlGetLastNtStatus();
+	}
+
 	return status;
 }
 
@@ -179,8 +187,7 @@ DetourNtAllocateVirtualMemory(
 			ProcessHandle, 
 			BaseAddress, ZeroBits, RegionSize, AllocationType, Protect);
 
-	if (STATUS_ACCESS_DENIED == status
-		&& ProcessHandle != GetCurrentProcess() && GetCurrentProcessId() != GetProcessId(ProcessHandle)) 
+	if (ProcessHandle != GetCurrentProcess() && GetCurrentProcessId() != GetProcessId(ProcessHandle)) 
 	{
 		return \
 			Processes::MemoryManagement::KbAllocUserMemory(
@@ -209,8 +216,7 @@ DetourNtReadVirtualMemory(
 			ProcessHandle, 
 			BaseAddress, Buffer, BufferSize, NumberOfBytesRead);
 
-	if (STATUS_ACCESS_DENIED == status
-		&& ProcessHandle != GetCurrentProcess() && GetCurrentProcessId() != GetProcessId(ProcessHandle)) 
+	if (ProcessHandle != GetCurrentProcess() && GetCurrentProcessId() != GetProcessId(ProcessHandle)) 
 	{
 		BOOL isOk = Processes::MemoryManagement::KbReadProcessMemory(
 			GetProcessId(ProcessHandle),
@@ -241,8 +247,7 @@ DetourNtWriteVirtualMemory(
 			ProcessHandle, 
 			BaseAddress, Buffer, BufferSize, NumberOfBytesWritten);
 
-	if (STATUS_ACCESS_DENIED == status
-		&& ProcessHandle != GetCurrentProcess() && GetCurrentProcessId() != GetProcessId(ProcessHandle)) 
+	if (ProcessHandle != GetCurrentProcess() && GetCurrentProcessId() != GetProcessId(ProcessHandle)) 
 	{
 		BOOL isOk = Processes::MemoryManagement::KbWriteProcessMemory(
 			GetProcessId(ProcessHandle),
@@ -325,46 +330,15 @@ DetourRtlCreateUserThread(
 			StartAddress, Parameter, 
 			Thread, ClientId);
 
-	if (STATUS_ACCESS_DENIED == status
-		&& Process != GetCurrentProcess() && GetCurrentProcessId() != GetProcessId(Process))
+	if (Process != GetCurrentProcess() && GetCurrentProcessId() != GetProcessId(Process))
 	{
 		return \
 			Processes::Threads::KbCreateUserThread(
 				GetProcessId(Process),
-				WdkTypes::PVOID(StartAddress), WdkTypes::PVOID(Parameter), 
-				CreateSuspended, 
+				WdkTypes::PVOID(StartAddress), WdkTypes::PVOID(Parameter),
+				CreateSuspended,
 				(WdkTypes::CLIENT_ID*)(ClientId), (WdkTypes::HANDLE*)(Thread)) ? STATUS_SUCCESS : RtlGetLastNtStatus();
 	}
-
-	return status;
-}
-
-decltype(&NtCreateThreadEx) OriginalNtCreateThreadEx = NULL;
-NTSTATUS
-NTAPI
-DetourNtCreateThreadEx(
-	_Out_ PHANDLE ThreadHandle,
-	_In_ ACCESS_MASK DesiredAccess,
-	_In_opt_ POBJECT_ATTRIBUTES ObjectAttributes,
-	_In_ HANDLE ProcessHandle,
-	_In_ PVOID StartRoutine, // PUSER_THREAD_START_ROUTINE
-	_In_opt_ PVOID Argument,
-	_In_ ULONG CreateFlags, // THREAD_CREATE_FLAGS_*
-	_In_ SIZE_T ZeroBits,
-	_In_ SIZE_T StackSize,
-	_In_ SIZE_T MaximumStackSize,
-	_In_opt_ PPS_ATTRIBUTE_LIST AttributeList
-) {
-	NTSTATUS status = STATUS_SUCCESS;
-
-	status = \
-		OriginalNtCreateThreadEx(
-			ThreadHandle,
-			DesiredAccess,
-			ObjectAttributes,
-			ProcessHandle, 
-			StartRoutine, Argument, 
-			CreateFlags, ZeroBits, StackSize, MaximumStackSize, AttributeList);
 
 	return status;
 }
@@ -516,7 +490,7 @@ DetourNtClose(
 		OriginalNtClose(
 			Handle);
 
-	if (STATUS_ACCESS_DENIED == status)
+	if (STATUS_ACCESS_DENIED == status || STATUS_INVALID_HANDLE == status)
 	{
 		return \
 			Processes::Descriptors::KbCloseHandle(
@@ -538,7 +512,7 @@ DetourNtWaitForSingleObject(
 
 	status = \
 		OriginalNtWaitForSingleObject(
-			Handle, 
+			Handle,
 			Alertable, Timeout);
 
 	return status;
@@ -596,7 +570,6 @@ public:
 		ATTACH_HOOK(NtQueryVirtualMemory);
 
 		ATTACH_HOOK(RtlCreateUserThread);
-		ATTACH_HOOK(NtCreateThreadEx);
 		ATTACH_HOOK(NtOpenThread);
 		ATTACH_HOOK(NtSuspendThread);
 		ATTACH_HOOK(NtResumeThread);
