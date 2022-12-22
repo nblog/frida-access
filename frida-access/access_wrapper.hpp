@@ -322,12 +322,10 @@ DetourRtlCreateUserThread(
 
 		/* thread handle */
 		if (ClientId && ClientId->UniqueThread) {
-			HANDLE hThread = OpenThread(
-				THREAD_ALL_ACCESS, FALSE, DWORD(ClientId->UniqueThread));
-
-			if (hThread && Thread) *Thread = hThread;
-
-			return hThread ? STATUS_SUCCESS : RtlGetLastNtStatus();
+			status =
+				Processes::Descriptors::KbOpenThread(
+				ULONG(ClientId->UniqueThread), (WdkTypes::HANDLE*)(Thread), 
+				THREAD_ALL_ACCESS, NULL) ? STATUS_SUCCESS : RtlGetLastNtStatus();
 		}
 	}
 
