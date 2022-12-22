@@ -41,6 +41,19 @@ EXTERN_C IMAGE_DOS_HEADER __ImageBase;
 
 
 
+
+BOOL IsSelfProcess(HANDLE ProcessHandle) {
+	return ProcessHandle == GetCurrentProcess()
+		|| GetCurrentProcessId() == GetProcessId(ProcessHandle);
+}
+
+
+
+
+
+
+
+
 decltype(&NtOpenProcess) OriginalNtOpenProcess = NULL;
 NTSTATUS
 NTAPI
@@ -56,17 +69,6 @@ DetourNtOpenProcess(
 		OriginalNtOpenProcess(
 			ProcessHandle, 
 			DesiredAccess, ObjectAttributes, ClientId);
-
-	if (STATUS_ACCESS_DENIED == status) 
-	{
-		if (NULL == ClientId) return STATUS_ACCESS_VIOLATION;
-
-		return \
-			Processes::Descriptors::KbOpenProcess(
-				HandleToULong(ClientId->UniqueProcess),
-				(WdkTypes::HANDLE*)(ProcessHandle),
-				DesiredAccess, ObjectAttributes->Attributes) ? STATUS_SUCCESS : RtlGetLastNtStatus();
-	}
 
 	return status;
 }
@@ -158,14 +160,6 @@ DetourNtFreeVirtualMemory(
 			ProcessHandle, 
 			BaseAddress, RegionSize, FreeType);
 
-	if (ProcessHandle != GetCurrentProcess() && GetCurrentProcessId() != GetProcessId(ProcessHandle))
-	{
-		return \
-			Processes::MemoryManagement::KbFreeUserMemory(
-				GetProcessId(ProcessHandle),
-				(WdkTypes::PVOID)(*BaseAddress)) ? STATUS_SUCCESS : RtlGetLastNtStatus();
-	}
-
 	return status;
 }
 
@@ -187,12 +181,11 @@ DetourNtAllocateVirtualMemory(
 			ProcessHandle, 
 			BaseAddress, ZeroBits, RegionSize, AllocationType, Protect);
 
-	if (ProcessHandle != GetCurrentProcess() && GetCurrentProcessId() != GetProcessId(ProcessHandle)) 
-	{
+	if (!IsSelfProcess(ProcessHandle) && STATUS_ACCESS_DENIED == status) {
 		return \
 			Processes::MemoryManagement::KbAllocUserMemory(
-				GetProcessId(ProcessHandle), 
-				Protect, 
+				GetProcessId(ProcessHandle),
+				Protect,
 				ULONG(*RegionSize), (WdkTypes::PVOID*)(BaseAddress)) ? STATUS_SUCCESS : RtlGetLastNtStatus();
 	}
 
@@ -216,17 +209,6 @@ DetourNtReadVirtualMemory(
 			ProcessHandle, 
 			BaseAddress, Buffer, BufferSize, NumberOfBytesRead);
 
-	if (ProcessHandle != GetCurrentProcess() && GetCurrentProcessId() != GetProcessId(ProcessHandle)) 
-	{
-		BOOL isOk = Processes::MemoryManagement::KbReadProcessMemory(
-			GetProcessId(ProcessHandle),
-			(WdkTypes::PVOID)(BaseAddress), Buffer, ULONG(BufferSize));
-
-		if (isOk && NumberOfBytesRead) *NumberOfBytesRead = BufferSize;
-
-		return isOk ? STATUS_SUCCESS : RtlGetLastNtStatus();
-	}
-
 	return status;
 }
 
@@ -247,8 +229,7 @@ DetourNtWriteVirtualMemory(
 			ProcessHandle, 
 			BaseAddress, Buffer, BufferSize, NumberOfBytesWritten);
 
-	if (ProcessHandle != GetCurrentProcess() && GetCurrentProcessId() != GetProcessId(ProcessHandle)) 
-	{
+	if (!IsSelfProcess(ProcessHandle) && STATUS_ACCESS_DENIED == status) {
 		BOOL isOk = Processes::MemoryManagement::KbWriteProcessMemory(
 			GetProcessId(ProcessHandle),
 			(WdkTypes::PVOID)(BaseAddress), Buffer, ULONG(BufferSize));
@@ -330,14 +311,24 @@ DetourRtlCreateUserThread(
 			StartAddress, Parameter, 
 			Thread, ClientId);
 
-	if (Process != GetCurrentProcess() && GetCurrentProcessId() != GetProcessId(Process))
-	{
-		return \
+	if (!IsSelfProcess(Process)) {
+		/* https://github.com/HoShiMin/Kernel-Bridge/issues/42 */
+		
+		status =
 			Processes::Threads::KbCreateUserThread(
 				GetProcessId(Process),
 				WdkTypes::PVOID(StartAddress), WdkTypes::PVOID(Parameter),
 				CreateSuspended,
 				(WdkTypes::CLIENT_ID*)(ClientId), (WdkTypes::HANDLE*)(Thread)) ? STATUS_SUCCESS : RtlGetLastNtStatus();
+
+		/* thread handle */
+		if (ClientId && ClientId->UniqueThread) {
+			HANDLE hThread = OpenThread(THREAD_ALL_ACCESS, FALSE, DWORD(ClientId->UniqueThread));
+			
+			if (hThread && Thread) *Thread = hThread;
+
+			return hThread ? STATUS_SUCCESS : RtlGetLastNtStatus();
+		}
 	}
 
 	return status;
@@ -358,17 +349,6 @@ DetourNtOpenThread(
 		OriginalNtOpenThread(
 			ThreadHandle, 
 			DesiredAccess, ObjectAttributes, ClientId);
-
-	if (STATUS_ACCESS_DENIED == status)
-	{
-		if (NULL == ClientId) return STATUS_ACCESS_VIOLATION;
-
-		return \
-			Processes::Descriptors::KbOpenThread(
-				HandleToULong(ClientId->UniqueThread),
-				(WdkTypes::HANDLE*)(ThreadHandle),
-				DesiredAccess, ObjectAttributes->Attributes) ? STATUS_SUCCESS : RtlGetLastNtStatus();
-	}
 
 	return status;
 }
@@ -490,13 +470,6 @@ DetourNtClose(
 		OriginalNtClose(
 			Handle);
 
-	if (STATUS_ACCESS_DENIED == status || STATUS_INVALID_HANDLE == status)
-	{
-		return \
-			Processes::Descriptors::KbCloseHandle(
-				(WdkTypes::HANDLE)(Handle)) ? STATUS_SUCCESS : RtlGetLastNtStatus();
-	}
-
 	return status;
 }
 
@@ -566,8 +539,8 @@ public:
 		ATTACH_HOOK(NtAllocateVirtualMemory);
 		ATTACH_HOOK(NtReadVirtualMemory);
 		ATTACH_HOOK(NtWriteVirtualMemory);
-		ATTACH_HOOK(NtProtectVirtualMemory);
 		ATTACH_HOOK(NtQueryVirtualMemory);
+		ATTACH_HOOK(NtProtectVirtualMemory);
 
 		ATTACH_HOOK(RtlCreateUserThread);
 		ATTACH_HOOK(NtOpenThread);
