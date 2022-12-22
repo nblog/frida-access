@@ -312,19 +312,19 @@ DetourRtlCreateUserThread(
 			Thread, ClientId);
 
 	if (!IsSelfProcess(Process)) {
-		/* https://github.com/HoShiMin/Kernel-Bridge/issues/42 */
-		
+		/* not support Win7: https://github.com/HoShiMin/Kernel-Bridge/issues/42*/
 		status =
 			Processes::Threads::KbCreateUserThread(
 				GetProcessId(Process),
 				WdkTypes::PVOID(StartAddress), WdkTypes::PVOID(Parameter),
 				CreateSuspended,
-				(WdkTypes::CLIENT_ID*)(ClientId), (WdkTypes::HANDLE*)(Thread)) ? STATUS_SUCCESS : RtlGetLastNtStatus();
+				(WdkTypes::CLIENT_ID*)(ClientId), NULL) ? STATUS_SUCCESS : RtlGetLastNtStatus();
 
 		/* thread handle */
 		if (ClientId && ClientId->UniqueThread) {
-			HANDLE hThread = OpenThread(THREAD_ALL_ACCESS, FALSE, DWORD(ClientId->UniqueThread));
-			
+			HANDLE hThread = OpenThread(
+				THREAD_ALL_ACCESS, FALSE, DWORD(ClientId->UniqueThread));
+
 			if (hThread && Thread) *Thread = hThread;
 
 			return hThread ? STATUS_SUCCESS : RtlGetLastNtStatus();
